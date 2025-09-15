@@ -1,35 +1,31 @@
 body {
-  background-color: #f8f9fa;
-  font-family: "Segoe UI", sans-serif;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-#camera-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  position: relative;
+.navbar-brand {
+    font-weight: bold;
 }
 
-#canvasOutput {
-  border-radius: 12px;
-  box-shadow: 0px 4px 10px rgba(0,0,0,0.15);
+.video-container {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
 }
 
-.counter-box {
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
+#videoInput, #canvasOutput {
+    width: 100%;
+    max-width: 640px;
+    height: auto;
 }
 
-/* Nuevos estilos añadidos */
-.counter-card {
-  transition: transform 0.3s ease;
+.card-title {
+    font-size: 1.2rem;
+    color: #0d6efd;
 }
 
-.counter-card:hover {
-  transform: translateY(-5px);
-}
-
-.min-vh-100 {
-  min-height: 100vh;
+.card-text {
+    font-weight: bold;
+    color: #495057;
 }
