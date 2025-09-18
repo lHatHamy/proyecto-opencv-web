@@ -15,10 +15,21 @@ let utils;
 let openCvReady = false;
 let detectionInterval;
 
+// Estados de detección
+let eyesDetected = false;
+let lastEyeStateChange = Date.now();
+
+let smileDetected = false;
+let lastSmileStateChange = Date.now();
+
+let lastEyebrowMean = null;
+let eyebrowMovementDetected = false;
+
+const TOLERANCE_TIME = 300; // ms para tolerancia de parpadeo y sonrisa
+
 // Función global para saber cuando OpenCV está listo
 function onOpenCvReady() {
     console.log("OpenCV.js está listo");
-    // Esperamos a que OpenCV esté completamente inicializado
     cv['onRuntimeInitialized'] = () => {
         openCvReady = true;
         initializeOpenCv();
@@ -41,21 +52,19 @@ function initializeOpenCv() {
     eyeCascade = new cv.CascadeClassifier();
     smileCascade = new cv.CascadeClassifier();
 
-    // Cargar XML
+    // Cargar clasificadores Haar
     utils.createFileFromUrl('haarcascade_frontalface_default.xml',
         'classifiers/haarcascade_frontalface_default.xml', () => {
             faceCascade.load('haarcascade_frontalface_default.xml');
             console.log("✅ Haarcascade rostro cargado");
             utils.updateProgress(60);
-            
-            // Cargar siguiente clasificador
+
             utils.createFileFromUrl('haarcascade_eye.xml',
                 'classifiers/haarcascade_eye.xml', () => {
                     eyeCascade.load('haarcascade_eye.xml');
                     console.log("✅ Haarcascade ojos cargado");
                     utils.updateProgress(80);
-                    
-                    // Cargar último clasificador
+
                     utils.createFileFromUrl('haarcascade_smile.xml',
                         'classifiers/haarcascade_smile.xml', () => {
                             smileCascade.load('haarcascade_smile.xml');
@@ -66,7 +75,7 @@ function initializeOpenCv() {
                 });
         });
 
-    // Asignar eventos a botones
+    // Asignar eventos
     document.getElementById("startBtn").addEventListener("click", startCamera);
     document.getElementById("stopBtn").addEventListener("click", stopCamera);
     document.getElementById("resetBtn").addEventListener("click", resetCounters);
@@ -78,26 +87,24 @@ function startCamera() {
         utils.printError('OpenCV no está listo todavía');
         return;
     }
-    
+
     navigator.mediaDevices.getUserMedia({ video: true, audio: false })
         .then(function (stream) {
             video.srcObject = stream;
             video.play();
             streaming = true;
             overlayText.style.display = 'none';
-            
+
             document.getElementById("startBtn").disabled = true;
             document.getElementById("stopBtn").disabled = false;
 
-            // Ajustar el tamaño del canvas al del video
             setTimeout(() => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                
+
                 src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
                 gray = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
 
-                // Iniciar detección
                 detectionInterval = requestAnimationFrame(detect);
             }, 500);
         })
@@ -109,10 +116,8 @@ function startCamera() {
 
 // Detener cámara
 function stopCamera() {
-    if (detectionInterval) {
-        cancelAnimationFrame(detectionInterval);
-    }
-    
+    if (detectionInterval) cancelAnimationFrame(detectionInterval);
+
     let stream = video.srcObject;
     if (stream) {
         let tracks = stream.getTracks();
@@ -122,11 +127,10 @@ function stopCamera() {
     streaming = false;
     overlayText.style.display = 'block';
     overlayText.textContent = 'Cámara desactivada';
-    
+
     document.getElementById("startBtn").disabled = false;
     document.getElementById("stopBtn").disabled = true;
 
-    // Liberar memoria de OpenCV
     if (src) src.delete();
     if (gray) gray.delete();
 }
@@ -147,126 +151,108 @@ function detect() {
     if (!streaming) return;
 
     try {
-        // Dibujar el frame actual en el canvas
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        // Obtener los datos de la imagen
         let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         src.data.set(imageData.data);
-        
-        // Convertir a escala de grises
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        
-        // Ecualizar el histograma para mejorar el contraste
-        cv.equalizeHist(gray, gray);
-        
-        let faces = new cv.RectVector();
-        let eyes = new cv.RectVector();
-        let smiles = new cv.RectVector();
 
-        // Detectar rostros
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+        cv.equalizeHist(gray, gray);
+
+        let faces = new cv.RectVector();
         faceCascade.detectMultiScale(gray, faces, 1.1, 3, 0);
 
-        // Dibujar rectángulos alrededor de los rostros detectados
         ctx.strokeStyle = '#0d6efd';
         ctx.lineWidth = 2;
-        
+
         for (let i = 0; i < faces.size(); i++) {
             let face = faces.get(i);
-            
-            // Dibujar rectángulo alrededor del rostro
-            ctx.beginPath();
-            ctx.rect(face.x, face.y, face.width, face.height);
-            ctx.stroke();
-            
+            ctx.strokeRect(face.x, face.y, face.width, face.height);
+
             let faceROI = gray.roi(face);
 
-            // Detección de ojos (parpadeo)
+            // --- OJOS (Parpadeo) ---
+            let eyes = new cv.RectVector();
             eyeCascade.detectMultiScale(faceROI, eyes, 1.1, 2, 0);
-            
-            // Dibujar ojos y contar parpadeos
-            ctx.strokeStyle = '#ffc107';
-            let eyesVisible = 0;
-            
+            let eyesNow = eyes.size() >= 2;
+
+            if (eyesNow !== eyesDetected) {
+                let now = Date.now();
+                if (!eyesNow && eyesDetected) {
+                    lastEyeStateChange = now; // desaparecieron
+                } else if (eyesNow && !eyesDetected && (now - lastEyeStateChange) < TOLERANCE_TIME) {
+                    blinkCounter++;
+                    document.getElementById("blinkCounter").innerText = blinkCounter;
+                    highlightCounter("blinkCounter");
+                }
+                eyesDetected = eyesNow;
+            }
+
             for (let j = 0; j < eyes.size(); j++) {
-                let eye = eyes.get(j);
-                ctx.beginPath();
-                ctx.rect(face.x + eye.x, face.y + eye.y, eye.width, eye.height);
-                ctx.stroke();
-                eyesVisible++;
+                let e = eyes.get(j);
+                ctx.strokeStyle = "#ffc107";
+                ctx.strokeRect(face.x + e.x, face.y + e.y, e.width, e.height);
             }
-            
-            // Si se detectan menos de 2 ojos, incrementar contador de parpadeos
-            if (eyes.size() < 2 && eyes.size() > 0) {
-                blinkCounter++;
-                document.getElementById("blinkCounter").innerText = blinkCounter;
-                
-                // Destacar el contador
-                highlightCounter('blinkCounter');
-            }
+            eyes.delete();
 
-            // Detección de sonrisa
+            // --- SONRISA ---
+            let smiles = new cv.RectVector();
             smileCascade.detectMultiScale(faceROI, smiles, 1.5, 20, 0);
-            
-            // Dibujar sonrisas y contar
-            ctx.strokeStyle = '#198754';
-            for (let j = 0; j < smiles.size(); j++) {
-                let smile = smiles.get(j);
-                ctx.beginPath();
-                ctx.rect(face.x + smile.x, face.y + smile.y, smile.width, smile.height);
-                ctx.stroke();
-            }
-            
-            if (smiles.size() > 0) {
-                smileCounter++;
-                document.getElementById("smileCounter").innerText = smileCounter;
-                
-                // Destacar el contador
-                highlightCounter('smileCounter');
+            let smileNow = smiles.size() > 0;
+
+            if (smileNow !== smileDetected) {
+                let now = Date.now();
+                if (!smileNow && smileDetected) {
+                    lastSmileStateChange = now; // desapareció
+                } else if (smileNow && !smileDetected && (now - lastSmileStateChange) < TOLERANCE_TIME) {
+                    smileCounter++;
+                    document.getElementById("smileCounter").innerText = smileCounter;
+                    highlightCounter("smileCounter");
+                }
+                smileDetected = smileNow;
             }
 
-            // Detección de cejas (basado en la región superior del rostro)
+            for (let j = 0; j < smiles.size(); j++) {
+                let s = smiles.get(j);
+                ctx.strokeStyle = "#198754";
+                ctx.strokeRect(face.x + s.x, face.y + s.y, s.width, s.height);
+            }
+            smiles.delete();
+
+            // --- CEJAS ---
             let eyebrowRegion = faceROI.roi(new cv.Rect(0, 0, faceROI.cols, Math.floor(faceROI.rows / 3)));
-            let mean = cv.mean(eyebrowRegion);
-            
-            // Si la intensidad media es alta (posible movimiento de cejas)
-            if (mean[0] > 70) {
+            let mean = cv.mean(eyebrowRegion)[0];
+
+            if (lastEyebrowMean !== null && Math.abs(mean - lastEyebrowMean) > 20 && !eyebrowMovementDetected) {
                 eyebrowCounter++;
                 document.getElementById("eyebrowCounter").innerText = eyebrowCounter;
-                
-                // Destacar el contador
-                highlightCounter('eyebrowCounter');
+                highlightCounter("eyebrowCounter");
+                eyebrowMovementDetected = true;
+                setTimeout(() => (eyebrowMovementDetected = false), 500);
             }
-            
+            lastEyebrowMean = mean;
+
             eyebrowRegion.delete();
             faceROI.delete();
         }
 
         faces.delete();
-        eyes.delete();
-        smiles.delete();
-        
-        // Continuar con el siguiente frame
         detectionInterval = requestAnimationFrame(detect);
     } catch (err) {
         console.error("Error en detección:", err);
-        utils.printError('Error en el proceso de detección: ' + err.message);
+        utils.printError('Error en detección: ' + err.message);
         stopCamera();
     }
 }
 
-// Función para destacar visualmente un contador cuando cambia
+// Resaltar contador
 function highlightCounter(counterId) {
     const counter = document.getElementById(counterId);
-    counter.classList.add('highlight');
-    
-    setTimeout(() => {
-        counter.classList.remove('highlight');
-    }, 500);
+    counter.classList.add("highlight");
+    setTimeout(() => counter.classList.remove("highlight"), 500);
 }
 
-// Añadir estilos para el highlight
-const style = document.createElement('style');
+// Estilos highlight
+const style = document.createElement("style");
 style.textContent = `
     .highlight {
         color: #dc3545 !important;
